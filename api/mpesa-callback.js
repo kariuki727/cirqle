@@ -1,96 +1,51 @@
 /**
  * api/mpesa-callback.js
- * Handles M-Pesa Lipa Na M-Pesa Online (LNMO) confirmation callbacks.
+ * Receives M-Pesa confirmation for STK Push.
  */
 
-const { MongoClient } = require('mongodb'); // Replace with your DB client if needed
-const MONGO_URI = process.env.MONGO_URI;
+const { doc, updateDoc, setDoc, getDoc } = require('firebase/firestore');
+const { db } = require('../services/firebase');
 
-let cachedClient = null;
+module.exports = async (req,res) => {
+  const callbackData = req.body;
+  console.log(`[${new Date().toISOString()}] M-Pesa callback received:`, JSON.stringify(callbackData,null,2));
 
-async function getDb() {
-  if (cachedClient) return cachedClient.db('mpesa');
-  const client = await MongoClient.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
-  cachedClient = client;
-  return client.db('mpesa');
-}
+  const resultBody = callbackData.Body?.stkCallback;
+  if (!resultBody || typeof resultBody.ResultCode === 'undefined') return res.status(200).json({ ResultCode:0, ResultDesc:'Accepted' });
 
-// Idempotent save function
-async function saveTransactionStatus(reference, status, transactionDetails) {
-  try {
-    const db = await getDb();
-    const collection = db.collection('transactions');
+  const resultCode = resultBody.ResultCode;
+  const checkoutRequestID = resultBody.CheckoutRequestID;
+  const merchantRequestID = resultBody.MerchantRequestID;
+  const resultDesc = resultBody.ResultDesc;
 
-    // Upsert: if reference exists, update; else insert
-    await collection.updateOne(
-      { clientReference: reference },
-      {
-        $set: {
-          status,
-          mpesaData: transactionDetails,
-          updatedAt: new Date(),
-        },
-        $setOnInsert: { createdAt: new Date() },
-      },
-      { upsert: true }
-    );
+  let reference = '';
+  let status = 'PENDING';
+  const transactionDetails = { checkoutRequestID, merchantRequestID, resultDesc, resultCode };
 
-    console.log(`[DB] Saved transaction status: ${status} for reference: ${reference}`);
-    return true;
-  } catch (err) {
-    console.error('[DB] Failed to save transaction status:', err);
-    return false;
+  if (resultCode === 0) {
+    status = 'SUCCESS';
+    const metadata = resultBody.CallbackMetadata?.Item || [];
+    metadata.forEach(item => {
+      if(item.Name==='AccountReference') reference=item.Value;
+      transactionDetails[item.Name] = item.Value;
+    });
+  } else if ([1,1032].includes(resultCode)) {
+    status='CANCELLED';
+    reference=resultBody.AccountReference || 'UNKNOWN';
+  } else {
+    status='FAILED';
+    reference=resultBody.AccountReference || 'UNKNOWN';
   }
-}
 
-module.exports = async (req, res) => {
-  try {
-    const callbackData = req.body;
-    console.log(`[${new Date().toISOString()}] M-Pesa callback received:`, JSON.stringify(callbackData, null, 2));
-
-    const resultBody = callbackData?.Body?.stkCallback;
-    if (!resultBody || typeof resultBody.ResultCode === 'undefined') {
-      console.error('[ERROR] Invalid M-Pesa callback format.');
-      return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
-    }
-
-    const { ResultCode, ResultDesc, CheckoutRequestID, MerchantRequestID } = resultBody;
-
-    // Default values
-    let transactionStatus = 'PENDING';
-    let clientReference = 'UNKNOWN';
-    const transactionDetails = { ResultDesc, CheckoutRequestID, MerchantRequestID, ResultCode };
-
-    // Parse CallbackMetadata safely
-    if (ResultCode === 0 && resultBody.CallbackMetadata?.Item) {
-      const metadataMap = {};
-      resultBody.CallbackMetadata.Item.forEach(item => {
-        metadataMap[item.Name] = item.Value;
-      });
-
-      clientReference = metadataMap.AccountReference || clientReference;
-      Object.assign(transactionDetails, metadataMap);
-      transactionStatus = 'SUCCESS';
-    } else if ([1, 1032].includes(ResultCode)) {
-      transactionStatus = 'CANCELLED';
-      clientReference = resultBody.AccountReference || clientReference;
+  if(reference && reference!=='UNKNOWN'){
+    const txRef = doc(db,'transactions',reference);
+    const existing = await getDoc(txRef);
+    if(existing.exists()){
+      await updateDoc(txRef, { status, transactionDetails, updatedAt:new Date().toISOString() });
     } else {
-      transactionStatus = 'FAILED';
-      clientReference = resultBody.AccountReference || clientReference;
+      await setDoc(txRef,{ status, transactionDetails, updatedAt:new Date().toISOString() });
     }
+  } else console.error('Could not determine client reference for:', checkoutRequestID);
 
-    // Save transaction (idempotent)
-    if (clientReference !== 'UNKNOWN') {
-      const saved = await saveTransactionStatus(clientReference, transactionStatus, transactionDetails);
-      if (!saved) console.error(`[ERROR] Could not save transaction for reference: ${clientReference}`);
-    } else {
-      console.warn(`[WARN] Client reference missing. CheckoutRequestID: ${CheckoutRequestID}`);
-    }
-
-    // Always respond 200 OK
-    return res.status(200).json({ ResultCode: 0, ResultDesc: 'Callback processed successfully' });
-  } catch (err) {
-    console.error('[FATAL] Error processing M-Pesa callback:', err);
-    return res.status(200).json({ ResultCode: 0, ResultDesc: 'Error handled safely' });
-  }
+  return res.status(200).json({ ResultCode:0, ResultDesc:'Callback processed successfully' });
 };
