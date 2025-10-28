@@ -20,20 +20,22 @@ const UpgradeAccount = ({ isOpen, onClose, tier, user }) => {
   const fee = tier === 'standard' ? 150 : 200;
   const apiUrl = process.env.REACT_APP_API_URL || 'https://earn-to-mpesa-online.vercel.app';
 
+  // --- Phone utilities ---
   const validatePhoneNumber = (phone) => {
-    const regex = /^(?:\+?254[71]\d{8}|0[71]\d{8})$/;
-    return regex.test(phone);
+    if (!phone) return false;
+    const cleaned = phone.replace(/[^0-9+]/g, '');
+    return /^(\+254[17]\d{8}|254[17]\d{8}|0[17]\d{8})$/.test(cleaned);
   };
 
   const normalizePhoneNumber = (phone) => {
-    if (!phone) return phone;
     const cleaned = phone.replace(/[^0-9+]/g, '');
-    if (/^0[7|1]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
-    if (/^\+254[71]\d{8}$/.test(cleaned)) return cleaned.slice(1);
+    if (/^0[17]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
+    if (/^\+254[17]\d{8}$/.test(cleaned)) return cleaned.slice(1);
+    if (/^254[17]\d{8}$/.test(cleaned)) return cleaned;
     return cleaned;
   };
 
-  const generateReference = () => `UPG-${user.uid}-${Date.now()}`;
+  const generateReference = () => `UPG-${user?.uid}-${Date.now()}`;
 
   const checkTransactionStatus = async (ref) => {
     try {
@@ -43,10 +45,10 @@ const UpgradeAccount = ({ isOpen, onClose, tier, user }) => {
       });
       return response.data;
     } catch (err) {
-      let errorMessage = 'Failed to check transaction status. Retrying...';
-      if (err.response?.status === 404) errorMessage = 'Transaction is being processed. Please wait...';
-      if (err.response?.status === 400) errorMessage = 'Invalid transaction reference. Please try again.';
-      return { success: false, error: errorMessage };
+      let msg = 'Failed to check transaction status. Retrying...';
+      if (err.response?.status === 404) msg = 'Transaction is being processed. Please wait...';
+      if (err.response?.status === 400) msg = 'Invalid transaction reference. Please try again.';
+      return { success: false, error: msg };
     }
   };
 
@@ -61,7 +63,7 @@ const UpgradeAccount = ({ isOpen, onClose, tier, user }) => {
             setPhoneNumber(displayPhone);
             setIsPhoneValid(validatePhoneNumber(displayPhone));
           }
-        } catch (err) {
+        } catch {
           setError('Failed to fetch phone number.');
         }
       };
@@ -78,7 +80,7 @@ const UpgradeAccount = ({ isOpen, onClose, tier, user }) => {
 
   const handleSavePhone = async () => {
     if (!isPhoneValid) {
-      setError('Please enter a valid Kenyan phone number (+254123456789, 0712345678, or 0112345678).');
+      setError('Enter a valid Kenyan phone number (+2547XXXXXXX, 07XXXXXXX, or 01XXXXXXX).');
       return;
     }
     try {
@@ -97,7 +99,7 @@ const UpgradeAccount = ({ isOpen, onClose, tier, user }) => {
       setIsEditing(!isPhoneValid);
       return;
     }
-    if (!isPhoneValid || isEditing) return setError('Please save a valid Kenyan phone number before paying.');
+    if (!isPhoneValid || isEditing) return setError('Save a valid phone number before paying.');
 
     const normalizedPhone = normalizePhoneNumber(phoneNumber);
     const newClientReference = generateReference();
@@ -115,7 +117,7 @@ const UpgradeAccount = ({ isOpen, onClose, tier, user }) => {
 
       if (!response.data.success) throw new Error(response.data.error || 'STK Push initiation failed');
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to initiate payment. Please try again.');
+      setError(err.response?.data?.error || 'Failed to initiate payment.');
       setPaymentLoading(false);
     }
   };
@@ -170,24 +172,22 @@ const UpgradeAccount = ({ isOpen, onClose, tier, user }) => {
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4 text-center">
         <LockClosedIcon className="h-6 w-6 text-primary mx-auto mb-4" />
-        <h2 className="text-lg font-bold text-primary mb-4">Access denied</h2>
+        <h2 className="text-lg font-bold text-primary mb-4">Upgrade Account</h2>
         <p className="text-primary mb-4">
-          Upgrade account to {tier.charAt(0).toUpperCase() + tier.slice(1)} for a one-time fee KSh {fee}. No additional charges.
+          Upgrade to {tier.charAt(0).toUpperCase() + tier.slice(1)} for a one-time fee of KSh {fee}.
         </p>
 
         {showInput && (
           <div className="mb-4">
-            <label className="block text-primary text-sm mb-2">Payment Number</label>
+            <label className="block text-primary text-sm mb-2">M-Pesa Phone Number</label>
             <div className="flex items-center justify-center gap-2">
               <input
                 type="text"
                 value={phoneNumber}
                 onChange={handlePhoneChange}
                 disabled={!isEditing || paymentLoading}
-                className={`w-3/4 px-3 py-2 border rounded text-primary ${
-                  isPhoneValid ? 'border-primary' : 'border-highlight'
-                } ${isEditing && !paymentLoading ? 'bg-white' : 'bg-gray-100'}`}
-                placeholder="+254123456789, 0712345678, or 0112345678"
+                className={`w-3/4 px-3 py-2 border rounded text-primary ${isPhoneValid ? 'border-primary' : 'border-highlight'} ${isEditing && !paymentLoading ? 'bg-white' : 'bg-gray-100'}`}
+                placeholder="+2547XXXXXXX, 07XXXXXXX, 01XXXXXXX"
               />
               {isEditing ? (
                 <button onClick={handleSavePhone} disabled={paymentLoading} className={`p-2 rounded ${paymentLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-highlight text-white hover:bg-accent'}`}>
@@ -209,22 +209,18 @@ const UpgradeAccount = ({ isOpen, onClose, tier, user }) => {
               <CheckCircleIcon className="h-12 w-12 text-highlight mx-auto mb-4" />
               <h3 className="text-lg font-bold text-primary mb-4">Upgrade Successful</h3>
               <p className="text-primary mb-4">
-                Payment of KSh {successAmount.toFixed(2)} via {successPhone} (Transaction ID: {transactionId}) completed successfully!
+                Payment of KSh {successAmount} via {successPhone} (Transaction ID: {transactionId}) completed successfully!
               </p>
-              <button onClick={() => { setShowSuccessModal(false); onClose(); }} className="bg-highlight text-white px-4 py-2 rounded-lg hover:bg-accent">
-                Close
-              </button>
+              <button onClick={() => { setShowSuccessModal(false); onClose(); }} className="bg-highlight text-white px-4 py-2 rounded-lg hover:bg-accent">Close</button>
             </div>
           </div>
         )}
 
         <div className="flex justify-center gap-4">
-          <button onClick={handlePayment} disabled={paymentLoading || (showInput && (!isPhoneValid || isEditing))} className={`bg-highlight text-white px-4 py-2 rounded hover:bg-accent ${paymentLoading || (showInput && !isPhoneValid) ? 'opacity-50 cursor-not-allowed' : ''}`}>
+          <button onClick={handlePayment} disabled={paymentLoading || (showInput && (!isPhoneValid || isEditing))} className={`bg-highlight text-white px-4 py-2 rounded hover:bg-accent ${paymentLoading || (showInput && (!isPhoneValid || isEditing)) ? 'opacity-50 cursor-not-allowed' : ''}`}>
             {paymentLoading ? 'Processing...' : showInput && isPhoneValid ? `Pay KSh ${fee} Now` : 'Upgrade Now'}
           </button>
-          <button onClick={onClose} disabled={paymentLoading} className="bg-white border border-primary text-primary px-4 py-2 rounded hover:bg-secondary">
-            Cancel
-          </button>
+          <button onClick={onClose} disabled={paymentLoading} className="bg-white border border-primary text-primary px-4 py-2 rounded hover:bg-secondary">Cancel</button>
         </div>
       </div>
 
