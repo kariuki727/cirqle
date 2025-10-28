@@ -102,10 +102,13 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
       );
 
       if (response.data.success) {
-        const transactionRef = response.data.payheroReference || newClientReference;
-        setTransactionId(transactionRef);
-        setPayheroReference(transactionRef);
-        console.log(`STK Push response - PayHero Reference: ${transactionRef}`);
+        // M-Pesa STK Push will always return the client reference back.
+        // Use newClientReference for both state and polling.
+        const mpesaCheckoutID = response.data.checkoutRequestID; // Keep this for debugging/optional STK query
+        
+        setTransactionId(newClientReference); // Use the client's reference (AccountReference)
+        // setPayheroReference(transactionRef); // DELETE/IGNORE this line
+        console.log(`STK Push response - Client Reference (AccountRef): ${newClientReference}`);
 
         // Start polling for transaction status
         const startTime = Date.now();
