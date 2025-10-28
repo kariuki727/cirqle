@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from 'react';
+import React, { useState, useContext } from 'react';
 import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
 import { AuthContext } from '../context/AuthContext';
 import { db } from '../services/firebase';
@@ -7,7 +7,8 @@ import axios from 'axios';
 
 const ActivateSurveyAccount = ({ isOpen, onClose }) => {
   const { user, userData } = useContext(AuthContext);
-  const [phone, setPhone] = useState(userData?.phone ? `0${userData.phone.slice(3)}` : '');
+
+  const [phone, setPhone] = useState(userData?.phone ? `0${userData.phone.slice(1)}` : '');
   const [phoneError, setPhoneError] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -15,27 +16,26 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
   const [transactionId, setTransactionId] = useState('');
   const [clientReference, setClientReference] = useState('');
 
-  const apiUrl = process.env.REACT_APP_API_URL || 'https://earn-to-mpesa-online.vercel.app';
+  const apiUrl = process.env.REACT_APP_API_URL || 'https://cirqle-khaki.vercel.app';
 
-  // --- Phone Utilities ---
-  const validatePhone = (value) => {
-    if (!value) return 'Phone number is required.';
-    const cleaned = value.replace(/[^0-9+]/g, '');
-    const regex = /^(\+254[17]\d{8}|254[17]\d{8}|0[17]\d{8})$/;
-    return regex.test(cleaned) ? '' : 'Invalid phone number format.';
+  const validatePhone = (phone) => {
+    if (!phone) return 'Phone number is required';
+    const cleaned = phone.replace(/[^0-9+]/g, '');
+    if (!/^(254[17]\d{8})$|^0[7|1]\d{8}$|^\+254[17]\d{8}$/.test(cleaned)) {
+      return 'Invalid phone number format. Use 07XXXXXXXX, 01XXXXXXXX, 254XXXXXXXXX, or +254XXXXXXXXX';
+    }
+    return '';
   };
 
-  const normalizePhone = (value) => {
-    const cleaned = value.replace(/[^0-9+]/g, '');
-    if (/^0[17]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
+  const normalizePhone = (phone) => {
+    const cleaned = phone.replace(/[^0-9+]/g, '');
+    if (/^0[7|1]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
     if (/^\+254[17]\d{8}$/.test(cleaned)) return cleaned.slice(1);
-    if (/^254[17]\d{8}$/.test(cleaned)) return cleaned;
-    return cleaned; // fallback
+    return cleaned;
   };
 
   const generateReference = () => `ACT-${user?.uid || 'GUEST'}-${Date.now()}`;
 
-  // --- Transaction Status Polling ---
   const checkTransactionStatus = async (ref) => {
     try {
       const response = await axios.get(`${apiUrl}/api/transaction-status`, {
@@ -52,8 +52,14 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
   };
 
   const handleActivate = async () => {
-    if (!user) return setError('Please sign in to activate your survey account.');
-    if (userData?.isSurveyAccountActivated) return setError('Your survey account is already activated.');
+    if (!user) {
+      setError('Please sign in to activate your survey account.');
+      return;
+    }
+    if (userData?.isSurveyAccountActivated) {
+      setError('Your survey account is already activated.');
+      return;
+    }
 
     const phoneValidationError = validatePhone(phone);
     if (phoneValidationError) {
@@ -70,7 +76,6 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
     setError('');
 
     try {
-      // --- Initiate STK Push ---
       const response = await axios.post(
         `${apiUrl}/api/stk-push`,
         { phoneNumber: normalizedPhone, amount: 100, reference: newClientReference },
@@ -79,18 +84,19 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
 
       if (!response.data.success) throw new Error(response.data.error || 'STK Push initiation failed');
 
-      // --- Poll status until SUCCESS, FAILED, CANCELLED, or timeout ---
       const startTime = Date.now();
-      const maxPolling = 300000; // 5 minutes
+      const maxPollingDuration = 300000;
 
       const pollStatus = async () => {
-        if (Date.now() - startTime > maxPolling) {
+        if (Date.now() - startTime > maxPollingDuration) {
           setError('Payment timed out. Please try again.');
           setLoading(false);
           return;
         }
 
         const statusData = await checkTransactionStatus(newClientReference);
+        if (!statusData) return;
+
         if (statusData.success) {
           if (statusData.status === 'SUCCESS') {
             const userRef = doc(db, 'users', user.uid);
@@ -105,7 +111,6 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
               }),
               updatedAt: new Date().toISOString(),
             });
-
             setShowSuccessModal(true);
             setLoading(false);
             onClose();
@@ -124,7 +129,7 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
       pollStatus();
     } catch (err) {
       console.error('Activation error:', err.message);
-      setError(err.response?.data?.error || 'Failed to initiate activation payment.');
+      setError(err.response?.data?.error || 'Failed to initiate activation payment. Please try again.');
       setLoading(false);
     }
   };
@@ -156,11 +161,9 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
         <div className="flex justify-center gap-4">
           <button
             onClick={handleActivate}
-            disabled={loading || validatePhone(phone) !== '' || !user || userData?.isSurveyAccountActivated}
+            disabled={loading || !phone || userData?.isSurveyAccountActivated}
             className={`bg-highlight text-white px-6 py-3 rounded-full flex items-center justify-center ${
-              loading || validatePhone(phone) !== '' || !user || userData?.isSurveyAccountActivated
-                ? 'bg-gray-400 cursor-not-allowed'
-                : 'hover:bg-accent'
+              loading || !phone || userData?.isSurveyAccountActivated ? 'bg-gray-400 cursor-not-allowed' : 'hover:bg-accent'
             }`}
           >
             <CurrencyDollarIcon className="w-5 h-5 mr-2" />
@@ -182,7 +185,7 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
             <CheckCircleIcon className="h-12 w-12 text-highlight mx-auto mb-4" />
             <h3 className="text-lg font-bold text-primary mb-4">Activation Successful</h3>
             <p className="text-primary mb-4">
-              Your survey account has been activated with a payment of KSh 100 via {normalizePhone(phone)} (Transaction ID: {transactionId}).
+              Your survey account has been activated with a payment of KSh 100 (Transaction ID: {transactionId}).
             </p>
             <button
               onClick={() => setShowSuccessModal(false)}
