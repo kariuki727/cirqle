@@ -20,10 +20,10 @@ const Deposit = () => {
   const [successPhone, setSuccessPhone] = useState('');
   const [transactionId, setTransactionId] = useState('');
   const [clientReference, setClientReference] = useState('');
-  const [payheroReference, setPayheroReference] = useState('');
 
-  const apiUrl = process.env.REACT_APP_API_URL || 'https://earn-to-mpesa-online.vercel.app';
+  const apiUrl = process.env.REACT_APP_API_URL || 'https://cirqle-khaki.vercel.app';
 
+  // Validate phone number format
   const validatePhone = (phone) => {
     if (!phone) return 'Phone number is required';
     const cleaned = phone.replace(/[^0-9+]/g, '');
@@ -33,41 +33,34 @@ const Deposit = () => {
     return '';
   };
 
+  // Normalize phone to 254XXXXXXXXX format
   const normalizePhone = (phone) => {
     const cleaned = phone.replace(/[^0-9+]/g, '');
-    if (/^0[7|1]\d{8}$/.test(cleaned)) {
-      return `254${cleaned.slice(1)}`;
-    }
-    if (/^\+254[17]\d{8}$/.test(cleaned)) {
-      return cleaned.slice(1);
-    }
+    if (/^0[7|1]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
+    if (/^\+254[17]\d{8}$/.test(cleaned)) return cleaned.slice(1);
     return cleaned;
   };
 
-  const generateReference = () => {
-    return `DEP-${user.uid}-${Date.now()}`;
-  };
+  // Generate a unique client reference for the transaction
+  const generateReference = () => `DEP-${user.uid}-${Date.now()}`;
 
+  // Poll transaction status from your backend
   const checkTransactionStatus = async (ref) => {
     try {
-      console.log(`Checking transaction status - PayHero Reference: ${ref}`);
       const response = await axios.get(`${apiUrl}/api/transaction-status`, {
         params: { reference: ref },
         timeout: 20000,
       });
       return response.data;
     } catch (err) {
-      console.error('Transaction status check error:', err.message);
       let errorMessage = 'Failed to check transaction status. Retrying...';
-      if (err.response?.status === 404) {
-        errorMessage = 'Transaction is being processed. Please wait...';
-      } else if (err.response?.status === 400) {
-        errorMessage = 'Invalid transaction reference. Please try again.';
-      }
+      if (err.response?.status === 404) errorMessage = 'Transaction is being processed. Please wait...';
+      if (err.response?.status === 400) errorMessage = 'Invalid transaction reference. Please try again.';
       return { success: false, error: errorMessage };
     }
   };
 
+  // Initiate M-Pesa STK push
   const handleDeposit = async () => {
     if (!user) {
       setAmountError('Please sign in to deposit.');
@@ -80,17 +73,13 @@ const Deposit = () => {
     if (isNaN(numAmount) || numAmount < 100) {
       setAmountError('Deposit amount must be at least KSh 100.');
       hasError = true;
-    } else {
-      setAmountError('');
-    }
+    } else setAmountError('');
 
     const phoneValidationError = validatePhone(phone);
     if (phoneValidationError) {
       setPhoneError(phoneValidationError);
       hasError = true;
-    } else {
-      setPhoneError('');
-    }
+    } else setPhoneError('');
 
     if (hasError) return;
 
@@ -100,7 +89,6 @@ const Deposit = () => {
     setDepositLoading(true);
 
     try {
-      console.log(`Sending STK Push - Phone: ${normalizedPhone}, Amount: ${numAmount}, Client Reference: ${newClientReference}`);
       const response = await axios.post(
         `${apiUrl}/api/stk-push`,
         {
@@ -108,43 +96,27 @@ const Deposit = () => {
           amount: numAmount,
           reference: newClientReference,
         },
-        {
-          headers: { 'Content-Type': 'application/json' },
-          timeout: 15000,
-        }
+        { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
       );
 
       if (response.data.success) {
-        // The client's reference is the most reliable ID for polling our database.
-        // We use the newClientReference which was generated locally.
-        const referenceForPolling = newClientReference;
-        
-        // Optionally store the Daraja CheckoutRequestID for debugging/future querying
-        const mpesaCheckoutID = response.data.checkoutRequestID; 
-        
-        setTransactionId(referenceForPolling); // transactionId is what's displayed to the user
-        setClientReference(referenceForPolling); // clientReference is what's used for polling
-        
-        // We no longer need the payheroReference state variable for polling, 
-        // but if the useEffect hook is dependent on it, we must set it.
-        setPayheroReference(referenceForPolling); 
-        
-        console.log(`STK Push response - Client Reference (AccountRef): ${referenceForPolling}`);
+        setTransactionId(newClientReference);
+        setClientReference(newClientReference);
       } else {
         throw new Error(response.data.error || 'STK Push initiation failed');
       }
     } catch (err) {
-      console.error('Deposit error:', err.message);
       setAmountError(err.response?.data?.error || 'Failed to initiate deposit. Please try again.');
       setDepositLoading(false);
     }
   };
 
+  // Poll transaction status until completed, failed, or timed out
   useEffect(() => {
-    if (!depositLoading || !payheroReference) return;
+    if (!depositLoading || !clientReference) return;
 
     const startTime = Date.now();
-    const maxPollingDuration = 300000; // 5 minutes
+    const maxPollingDuration = 300000; // 5 min
 
     const pollStatus = async () => {
       if (Date.now() - startTime > maxPollingDuration) {
@@ -153,22 +125,22 @@ const Deposit = () => {
         return;
       }
 
-      const statusData = await checkTransactionStatus(payheroReference);
+      const statusData = await checkTransactionStatus(clientReference);
       if (statusData.success) {
         if (statusData.status === 'SUCCESS') {
           const userRef = doc(db, 'users', user.uid);
-          const numAmount = parseFloat(amount);
           await updateDoc(userRef, {
-            gamingEarnings: (userData?.gamingEarnings || 0) + numAmount,
+            gamingEarnings: (userData?.gamingEarnings || 0) + parseFloat(amount),
             phone: normalizePhone(phone),
             history: arrayUnion({
               task: `M-Pesa Deposit (${normalizePhone(phone)})`,
-              reward: numAmount,
+              reward: parseFloat(amount),
               date: new Date().toLocaleString(),
-              transactionId: transactionId,
+              transactionId,
             }),
           });
-          setSuccessAmount(numAmount);
+
+          setSuccessAmount(parseFloat(amount));
           setSuccessPhone(normalizePhone(phone));
           setShowSuccessModal(true);
           setDepositLoading(false);
@@ -183,13 +155,12 @@ const Deposit = () => {
       }
     };
 
-    const pollInterval = setInterval(pollStatus, 5000);
-    return () => clearInterval(pollInterval);
-  }, [depositLoading, payheroReference, user, userData, amount, phone, transactionId]);
+    const interval = setInterval(pollStatus, 5000);
+    return () => clearInterval(interval);
+  }, [depositLoading, clientReference, user, userData, amount, phone, transactionId]);
 
   const handleCancel = () => {
     const from = location.state?.from || '/tasks';
-    console.log('Cancel redirecting to:', from);
     navigate(from, { replace: true });
   };
 
@@ -201,14 +172,14 @@ const Deposit = () => {
   return (
     <div className="min-h-screen bg-secondary font-roboto flex items-start justify-center px-4 pt-4 pb-20">
       <div className="w-full max-w-md">
-        <h5 className="text-left font-bold text-primary font-roboto mb-4">
+        <h5 className="text-left font-bold text-primary mb-4">
           Deposit to Your Account, {userData?.username || 'User'}!
         </h5>
         <div className="bg-primary text-white p-4 rounded-lg shadow-inner space-y-4">
-          <p className="text-lg font-roboto">Enter the amount to deposit via M-Pesa</p>
+          <p className="text-lg">Enter the amount to deposit via M-Pesa</p>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-roboto mb-1">Amount (KSh)</label>
+              <label className="block text-sm mb-1">Amount (KSh)</label>
               <input
                 type="number"
                 min="100"
@@ -219,14 +190,12 @@ const Deposit = () => {
                   setAmount(e.target.value);
                   setAmountError('');
                 }}
-                className="w-full bg-white text-primary px-3 py-2 rounded-lg font-roboto transition duration-300 focus:outline-none focus:ring-2 focus:ring-highlight"
+                className="w-full bg-white text-primary px-3 py-2 rounded-lg transition duration-300 focus:outline-none focus:ring-2 focus:ring-highlight"
               />
-              {amountError && (
-                <p className="text-red-500 text-sm font-roboto mt-1">{amountError}</p>
-              )}
+              {amountError && <p className="text-red-500 text-sm mt-1">{amountError}</p>}
             </div>
             <div>
-              <label className="block text-sm font-roboto mb-1">M-Pesa Phone Number</label>
+              <label className="block text-sm mb-1">M-Pesa Phone Number</label>
               <input
                 type="tel"
                 placeholder="07XXXXXXXX, 01XXXXXXXX, 254XXXXXXXXX, or +254XXXXXXXXX"
@@ -235,18 +204,16 @@ const Deposit = () => {
                   setPhone(e.target.value);
                   setPhoneError('');
                 }}
-                className="w-full bg-white text-primary px-3 py-2 rounded-lg font-roboto transition duration-300 focus:outline-none focus:ring-2 focus:ring-highlight"
+                className="w-full bg-white text-primary px-3 py-2 rounded-lg transition duration-300 focus:outline-none focus:ring-2 focus:ring-highlight"
               />
-              {phoneError && (
-                <p className="text-red-500 text-sm font-roboto mt-1">{phoneError}</p>
-              )}
+              {phoneError && <p className="text-red-500 text-sm mt-1">{phoneError}</p>}
             </div>
           </div>
           <div className="flex justify-between gap-4 mt-4">
             <button
               onClick={handleDeposit}
               disabled={depositLoading || !isFormValid()}
-              className={`flex-1 text-white px-6 py-3 rounded-full font-roboto transition duration-300 flex items-center justify-center shadow-md hover:shadow-lg ${
+              className={`flex-1 text-white px-6 py-3 rounded-full transition duration-300 flex items-center justify-center shadow-md hover:shadow-lg ${
                 depositLoading || !isFormValid()
                   ? 'bg-highlight opacity-50 cursor-not-allowed'
                   : 'bg-highlight-bright hover:bg-accent'
@@ -257,12 +224,13 @@ const Deposit = () => {
             </button>
             <button
               onClick={handleCancel}
-              className="flex-1 bg-gray-400 text-white px-4 py-2 rounded-lg font-roboto transition duration-300 flex items-center justify-center hover:bg-gray-500"
+              className="flex-1 bg-gray-400 text-white px-4 py-2 rounded-lg transition duration-300 flex items-center justify-center hover:bg-gray-500"
             >
               Cancel
             </button>
           </div>
         </div>
+
         {showSuccessModal && (
           <div
             className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
@@ -276,8 +244,8 @@ const Deposit = () => {
               onClick={(e) => e.stopPropagation()}
             >
               <CheckCircleIcon className="h-12 w-12 text-highlight mx-auto mb-4" />
-              <h3 className="text-lg font-bold text-primary font-roboto mb-4">Deposit Successful</h3>
-              <p className="text-primary font-roboto mb-4">
+              <h3 className="text-lg font-bold text-primary mb-4">Deposit Successful</h3>
+              <p className="text-primary mb-4">
                 Deposit of KSh {successAmount.toFixed(2)} via {successPhone} (Transaction ID: {transactionId}) completed successfully!
               </p>
               <button
@@ -285,7 +253,7 @@ const Deposit = () => {
                   setShowSuccessModal(false);
                   navigate('/tasks', { replace: true });
                 }}
-                className="bg-highlight text-white px-4 py-2 rounded-lg font-roboto transition duration-300 hover:bg-accent"
+                className="bg-highlight text-white px-4 py-2 rounded-lg transition duration-300 hover:bg-accent"
               >
                 Close
               </button>
@@ -293,6 +261,7 @@ const Deposit = () => {
           </div>
         )}
       </div>
+
       <style jsx>{`
         .bg-highlight-bright {
           background-color: #34D1CC;
