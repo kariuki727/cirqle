@@ -115,9 +115,21 @@ const Deposit = () => {
       );
 
       if (response.data.success) {
-        setTransactionId(response.data.payheroReference || newClientReference);
-        setPayheroReference(response.data.payheroReference || newClientReference);
-        console.log(`STK Push response - PayHero Reference: ${response.data.payheroReference}`);
+        // The client's reference is the most reliable ID for polling our database.
+        // We use the newClientReference which was generated locally.
+        const referenceForPolling = newClientReference;
+        
+        // Optionally store the Daraja CheckoutRequestID for debugging/future querying
+        const mpesaCheckoutID = response.data.checkoutRequestID; 
+        
+        setTransactionId(referenceForPolling); // transactionId is what's displayed to the user
+        setClientReference(referenceForPolling); // clientReference is what's used for polling
+        
+        // We no longer need the payheroReference state variable for polling, 
+        // but if the useEffect hook is dependent on it, we must set it.
+        setPayheroReference(referenceForPolling); 
+        
+        console.log(`STK Push response - Client Reference (AccountRef): ${referenceForPolling}`);
       } else {
         throw new Error(response.data.error || 'STK Push initiation failed');
       }
