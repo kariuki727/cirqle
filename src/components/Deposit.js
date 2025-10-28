@@ -10,6 +10,7 @@ const Deposit = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, userData } = useContext(AuthContext);
+
   const [amount, setAmount] = useState('');
   const [phone, setPhone] = useState(userData?.phone ? `0${userData.phone.slice(3)}` : '');
   const [amountError, setAmountError] = useState('');
@@ -21,30 +22,28 @@ const Deposit = () => {
   const [transactionId, setTransactionId] = useState('');
   const [clientReference, setClientReference] = useState('');
 
-  const apiUrl = process.env.REACT_APP_API_URL || 'https://cirqle-khaki.vercel.app';
+  const apiUrl = process.env.REACT_APP_API_URL || 'https://earn-to-mpesa-online.vercel.app';
 
-  // Validate phone number format
+  // Validate Kenyan M-Pesa phone
   const validatePhone = (phone) => {
     if (!phone) return 'Phone number is required';
     const cleaned = phone.replace(/[^0-9+]/g, '');
-    if (!/^(254[17]\d{8})$|^0[7|1]\d{8}$|^\+254[17]\d{8}$/.test(cleaned)) {
+    if (!/^(?:\+254[17]\d{8}|0[17]\d{8}|254[17]\d{8})$/.test(cleaned)) {
       return 'Invalid phone number format. Use 07XXXXXXXX, 01XXXXXXXX, 254XXXXXXXXX, or +254XXXXXXXXX';
     }
     return '';
   };
 
-  // Normalize phone to 254XXXXXXXXX format
+  // Normalize to 254XXXXXXXXX
   const normalizePhone = (phone) => {
     const cleaned = phone.replace(/[^0-9+]/g, '');
-    if (/^0[7|1]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
+    if (/^0[17]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
     if (/^\+254[17]\d{8}$/.test(cleaned)) return cleaned.slice(1);
     return cleaned;
   };
 
-  // Generate a unique client reference for the transaction
   const generateReference = () => `DEP-${user.uid}-${Date.now()}`;
 
-  // Poll transaction status from your backend
   const checkTransactionStatus = async (ref) => {
     try {
       const response = await axios.get(`${apiUrl}/api/transaction-status`, {
@@ -53,14 +52,13 @@ const Deposit = () => {
       });
       return response.data;
     } catch (err) {
-      let errorMessage = 'Failed to check transaction status. Retrying...';
-      if (err.response?.status === 404) errorMessage = 'Transaction is being processed. Please wait...';
-      if (err.response?.status === 400) errorMessage = 'Invalid transaction reference. Please try again.';
-      return { success: false, error: errorMessage };
+      let msg = 'Failed to check transaction status. Retrying...';
+      if (err.response?.status === 404) msg = 'Transaction is being processed. Please wait...';
+      if (err.response?.status === 400) msg = 'Invalid transaction reference. Please try again.';
+      return { success: false, error: msg };
     }
   };
 
-  // Initiate M-Pesa STK push
   const handleDeposit = async () => {
     if (!user) {
       setAmountError('Please sign in to deposit.');
@@ -86,78 +84,73 @@ const Deposit = () => {
     const normalizedPhone = normalizePhone(phone);
     const newClientReference = generateReference();
     setClientReference(newClientReference);
+    setTransactionId(newClientReference);
     setDepositLoading(true);
 
     try {
       const response = await axios.post(
         `${apiUrl}/api/stk-push`,
-        {
-          phoneNumber: normalizedPhone,
-          amount: numAmount,
-          reference: newClientReference,
-        },
+        { phoneNumber: normalizedPhone, amount: numAmount, reference: newClientReference },
         { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
       );
 
-      if (response.data.success) {
-        setTransactionId(newClientReference);
-        setClientReference(newClientReference);
-      } else {
-        throw new Error(response.data.error || 'STK Push initiation failed');
-      }
+      if (!response.data.success) throw new Error(response.data.error || 'STK Push initiation failed');
     } catch (err) {
       setAmountError(err.response?.data?.error || 'Failed to initiate deposit. Please try again.');
       setDepositLoading(false);
     }
   };
 
-  // Poll transaction status until completed, failed, or timed out
+  // Poll STK push status
   useEffect(() => {
     if (!depositLoading || !clientReference) return;
 
     const startTime = Date.now();
-    const maxPollingDuration = 300000; // 5 min
+    const maxDuration = 300000; // 5 minutes
 
-    const pollStatus = async () => {
-      if (Date.now() - startTime > maxPollingDuration) {
+    const interval = setInterval(async () => {
+      if (Date.now() - startTime > maxDuration) {
         setAmountError('Payment timed out. Please try again.');
         setDepositLoading(false);
+        clearInterval(interval);
         return;
       }
 
       const statusData = await checkTransactionStatus(clientReference);
       if (statusData.success) {
+        const normalized = normalizePhone(phone);
         if (statusData.status === 'SUCCESS') {
           const userRef = doc(db, 'users', user.uid);
           await updateDoc(userRef, {
             gamingEarnings: (userData?.gamingEarnings || 0) + parseFloat(amount),
-            phone: normalizePhone(phone),
+            phone: normalized,
             history: arrayUnion({
-              task: `M-Pesa Deposit (${normalizePhone(phone)})`,
+              task: `M-Pesa Deposit (${normalized})`,
               reward: parseFloat(amount),
               date: new Date().toLocaleString(),
-              transactionId,
+              transactionId: clientReference,
             }),
           });
 
           setSuccessAmount(parseFloat(amount));
-          setSuccessPhone(normalizePhone(phone));
+          setSuccessPhone(normalized);
           setShowSuccessModal(true);
           setDepositLoading(false);
-        } else if (statusData.status === 'FAILED' || statusData.status === 'CANCELLED') {
+          clearInterval(interval);
+        } else if (['FAILED', 'CANCELLED'].includes(statusData.status)) {
           setAmountError(`Deposit ${statusData.status.toLowerCase()}. Please try again.`);
           setDepositLoading(false);
+          clearInterval(interval);
         } else if (statusData.status === 'QUEUED') {
           setAmountError('Transaction is being processed. Please wait...');
         }
       } else {
         setAmountError(statusData.error);
       }
-    };
+    }, 5000);
 
-    const interval = setInterval(pollStatus, 5000);
     return () => clearInterval(interval);
-  }, [depositLoading, clientReference, user, userData, amount, phone, transactionId]);
+  }, [depositLoading, clientReference, user, userData, amount, phone]);
 
   const handleCancel = () => {
     const from = location.state?.from || '/tasks';
@@ -165,8 +158,7 @@ const Deposit = () => {
   };
 
   const isFormValid = () => {
-    const numAmount = parseFloat(amount);
-    return user && numAmount >= 100 && validatePhone(phone) === '';
+    return user && parseFloat(amount) >= 100 && validatePhone(phone) === '';
   };
 
   return (
@@ -186,10 +178,7 @@ const Deposit = () => {
                 step="0.01"
                 placeholder="Enter amount"
                 value={amount}
-                onChange={(e) => {
-                  setAmount(e.target.value);
-                  setAmountError('');
-                }}
+                onChange={(e) => { setAmount(e.target.value); setAmountError(''); }}
                 className="w-full bg-white text-primary px-3 py-2 rounded-lg transition duration-300 focus:outline-none focus:ring-2 focus:ring-highlight"
               />
               {amountError && <p className="text-red-500 text-sm mt-1">{amountError}</p>}
@@ -200,10 +189,7 @@ const Deposit = () => {
                 type="tel"
                 placeholder="07XXXXXXXX, 01XXXXXXXX, 254XXXXXXXXX, or +254XXXXXXXXX"
                 value={phone}
-                onChange={(e) => {
-                  setPhone(e.target.value);
-                  setPhoneError('');
-                }}
+                onChange={(e) => { setPhone(e.target.value); setPhoneError(''); }}
                 className="w-full bg-white text-primary px-3 py-2 rounded-lg transition duration-300 focus:outline-none focus:ring-2 focus:ring-highlight"
               />
               {phoneError && <p className="text-red-500 text-sm mt-1">{phoneError}</p>}
@@ -234,10 +220,7 @@ const Deposit = () => {
         {showSuccessModal && (
           <div
             className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-            onClick={() => {
-              setShowSuccessModal(false);
-              navigate('/tasks', { replace: true });
-            }}
+            onClick={() => { setShowSuccessModal(false); navigate('/tasks', { replace: true }); }}
           >
             <div
               className="bg-white rounded-lg p-6 w-full max-w-md mx-4 text-center shadow-lg animate-fade-in"
@@ -249,10 +232,7 @@ const Deposit = () => {
                 Deposit of KSh {successAmount.toFixed(2)} via {successPhone} (Transaction ID: {transactionId}) completed successfully!
               </p>
               <button
-                onClick={() => {
-                  setShowSuccessModal(false);
-                  navigate('/tasks', { replace: true });
-                }}
+                onClick={() => { setShowSuccessModal(false); navigate('/tasks', { replace: true }); }}
                 className="bg-highlight text-white px-4 py-2 rounded-lg transition duration-300 hover:bg-accent"
               >
                 Close
@@ -263,16 +243,9 @@ const Deposit = () => {
       </div>
 
       <style jsx>{`
-        .bg-highlight-bright {
-          background-color: #34D1CC;
-        }
-        .animate-fade-in {
-          animation: fadeIn 0.3s ease-in;
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
+        .bg-highlight-bright { background-color: #34D1CC; }
+        .animate-fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
       `}</style>
     </div>
   );
