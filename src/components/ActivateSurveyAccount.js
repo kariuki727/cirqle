@@ -7,7 +7,7 @@ import axios from 'axios';
 
 const ActivateSurveyAccount = ({ isOpen, onClose }) => {
   const { user, userData } = useContext(AuthContext);
-  const [phone, setPhone] = useState(userData?.phone ? `0${userData.phone.slice(1)}` : '');
+  const [phone, setPhone] = useState(userData?.phone ? `0${userData.phone.slice(3)}` : '');
   const [phoneError, setPhoneError] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -15,29 +15,27 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
   const [transactionId, setTransactionId] = useState('');
   const [clientReference, setClientReference] = useState('');
 
-  const apiUrl = process.env.REACT_APP_API_URL || 'https://cirqle-khaki.vercel.app';
+  const apiUrl = process.env.REACT_APP_API_URL || 'https://earn-to-mpesa-online.vercel.app';
 
-  // Validate phone
-  const validatePhone = (phone) => {
-    if (!phone) return 'Phone number is required';
-    const cleaned = phone.replace(/[^0-9+]/g, '');
-    if (!/^(254[17]\d{8})$|^0[7|1]\d{8}$|^\+254[17]\d{8}$/.test(cleaned)) {
-      return 'Invalid phone number format. Use 07XXXXXXXX, 01XXXXXXXX, 254XXXXXXXXX, or +254XXXXXXXXX';
-    }
-    return '';
+  // --- Phone Utilities ---
+  const validatePhone = (value) => {
+    if (!value) return 'Phone number is required.';
+    const cleaned = value.replace(/[^0-9+]/g, '');
+    const regex = /^(\+254[17]\d{8}|254[17]\d{8}|0[17]\d{8})$/;
+    return regex.test(cleaned) ? '' : 'Invalid phone number format.';
   };
 
-  // Normalize phone to 254XXXXXXXXX
-  const normalizePhone = (phone) => {
-    const cleaned = phone.replace(/[^0-9+]/g, '');
-    if (/^0[7|1]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
+  const normalizePhone = (value) => {
+    const cleaned = value.replace(/[^0-9+]/g, '');
+    if (/^0[17]\d{8}$/.test(cleaned)) return `254${cleaned.slice(1)}`;
     if (/^\+254[17]\d{8}$/.test(cleaned)) return cleaned.slice(1);
-    return cleaned;
+    if (/^254[17]\d{8}$/.test(cleaned)) return cleaned;
+    return cleaned; // fallback
   };
 
   const generateReference = () => `ACT-${user?.uid || 'GUEST'}-${Date.now()}`;
 
-  // Poll transaction status
+  // --- Transaction Status Polling ---
   const checkTransactionStatus = async (ref) => {
     try {
       const response = await axios.get(`${apiUrl}/api/transaction-status`, {
@@ -54,15 +52,8 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
   };
 
   const handleActivate = async () => {
-    if (!user) {
-      setError('Please sign in to activate your survey account.');
-      return;
-    }
-
-    if (userData?.isSurveyAccountActivated) {
-      setError('Your survey account is already activated.');
-      return;
-    }
+    if (!user) return setError('Please sign in to activate your survey account.');
+    if (userData?.isSurveyAccountActivated) return setError('Your survey account is already activated.');
 
     const phoneValidationError = validatePhone(phone);
     if (phoneValidationError) {
@@ -79,6 +70,7 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
     setError('');
 
     try {
+      // --- Initiate STK Push ---
       const response = await axios.post(
         `${apiUrl}/api/stk-push`,
         { phoneNumber: normalizedPhone, amount: 100, reference: newClientReference },
@@ -87,12 +79,12 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
 
       if (!response.data.success) throw new Error(response.data.error || 'STK Push initiation failed');
 
-      // Poll for transaction status until SUCCESS, FAILED, or timeout
+      // --- Poll status until SUCCESS, FAILED, CANCELLED, or timeout ---
       const startTime = Date.now();
-      const maxPollingDuration = 300000; // 5 minutes
+      const maxPolling = 300000; // 5 minutes
 
       const pollStatus = async () => {
-        if (Date.now() - startTime > maxPollingDuration) {
+        if (Date.now() - startTime > maxPolling) {
           setError('Payment timed out. Please try again.');
           setLoading(false);
           return;
@@ -132,7 +124,7 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
       pollStatus();
     } catch (err) {
       console.error('Activation error:', err.message);
-      setError(err.response?.data?.error || 'Failed to initiate activation payment. Please try again.');
+      setError(err.response?.data?.error || 'Failed to initiate activation payment.');
       setLoading(false);
     }
   };
