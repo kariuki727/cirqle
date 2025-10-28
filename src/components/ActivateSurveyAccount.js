@@ -16,7 +16,7 @@ const ActivateSurveyAccount = ({ isOpen, onClose }) => {
   const [clientReference, setClientReference] = useState('');
   const [payheroReference, setPayheroReference] = useState('');
 
-  const apiUrl = process.env.REACT_APP_API_URL || 'https://earn-to-mpesa-online.vercel.app';
+  const apiUrl = process.env.REACT_APP_API_URL || 'https://cirqle-khaki.vercel.app';
 
   const validatePhone = (phone) => {
     if (!phone) return 'Phone number is required';
